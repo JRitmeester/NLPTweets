@@ -246,7 +246,7 @@ def FT(n=2):
 ## Logistic Regression
 # Adopted from https://www.kaggle.com/lbronchal/sentiment-analysis-with-svm
 
-def LR(vectoriser=None, stem=False, stopwords=True, n=1, parameters=None):
+def LR(vectoriser=None, stem=False, stopwords=True, n=1, hyperparams=None):
     tprint("Logistic Regression is starting...")
 
     def tokenize(text):
@@ -277,25 +277,23 @@ def LR(vectoriser=None, stem=False, stopwords=True, n=1, parameters=None):
             'logisticregression__penalty': ['l1', 'l2'],
             'logisticregression__C': np.logspace(-4, 4, 20),
             'logisticregression__solver': ['liblinear']}  # liblinear; saga often the best choice but takes way more time
+        # Create the grid search object to find optimal hyperparameters. n_jobs may be varied to use multiple CPU cores.
+        # Note that this may not necessarily be faster, depending on the classification task!
+        grid_LR = GridSearchCV(pipeline_LR,
+                               param_grid=param_grid_,
+                               cv=kfolds,
+                               scoring="roc_auc",
+                               verbose=1,
+                               n_jobs=4)
+        grid_LR.fit(X_train_, y_train_)
+        grid_LR.score(X_test_, y_test_)
+        print('Best LR paramater:' + str(grid_LR.best_params_))
+        print('Best score: ' + str(grid_LR.best_score_))
+        model = grid_LR.best_estimator_
     else:
         # TODO: Fix model parameters to reduce runtime.
         pass
-
-    # Create the grid search object to find optimal hyperparameters. n_jobs may be varied to use multiple CPU cores.
-    # Note that this may not necessarily be faster, depending on the classification task!
-    grid_LR = GridSearchCV(pipeline_LR,
-                           param_grid=param_grid_,
-                           cv=kfolds,
-                           scoring="roc_auc",
-                           verbose=1,
-                           n_jobs=4)
-
-    grid_LR.fit(X_train_, y_train_)
-    grid_LR.score(X_test_, y_test_)
-    print('Best LR paramater:' + str(grid_LR.best_params_))
-    print('Best score: ' + str(grid_LR.best_score_))
-
-    model = grid_LR.best_estimator_
+        model = LogisticRegression(hyperparams)
     pred = model.predict(X_test_)
 
     lr_scores = Scores(pred, y_test_, "LR")
@@ -431,10 +429,13 @@ tk = TweetTokenizer()
 
 # Set your arguments here inside the respective classifier functions
 
+# Found using grid search using 40.000 samples, now fixed to reduce processing time.
+LR_hyper = {"penalty":"l2", "C":0.23357214690901212, 'solver':'liblinear', "max_iter":1000}
+
 scores = {
     "VADER": VADER(),
     "FT": FT(),
-    "LR": LR(),
+    "LR": LR(hyperparams=LR_hyper),
     "NB": NB()
 }
 
