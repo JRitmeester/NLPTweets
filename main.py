@@ -11,7 +11,7 @@ The tweet IDs in this data set need then to be hydrated (e.g. using twarc) and f
 The cells contain the following steps:
     - Load libraries
     - Loads data
-    - Prepcesses / clean data
+    - Preprocesses / clean data
     - Split data into test and train
     - Classify
         - Vader
@@ -25,7 +25,6 @@ TODO:
     - plot sentiment over time for the tweets from usa using the best classifier.
 """
 
-# %% Import libraries
 import re
 import pandas as pd
 import numpy as np
@@ -67,7 +66,7 @@ from sklearn.metrics import roc_curve, auc
 from sklearn.metrics import confusion_matrix, roc_auc_score, recall_score, precision_score
 from sklearn.naive_bayes import MultinomialNB, ComplementNB, GaussianNB, BernoulliNB
 
-def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_columns=[]):
+def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_columns=[], stopwordFiltering=False):
     '''
     Loads in previously cleaned data set ``filename``, or cleans new data set using the rest of the parameters and stores
     it in ``filename`` for later reuse.
@@ -127,6 +126,11 @@ def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_col
     def lowercase(tweet):
         return tweet.lower()
 
+    def stopwordFilter(tweet):
+        word_list = word_tokenize(tweet)
+        filtered = [word for word in word_list if not word in en_stopwords]
+        return ' '.join(filtered)
+
     def clean_tweet(tweets):
         '''
         Removes RT handles, username handles, URLs, double whitespaces and finally interpunction
@@ -143,6 +147,8 @@ def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_col
         # tweets = np.vectorize(lemmatise_)(tweets)
         tweets = np.core.defchararray.replace(tweets, "[^a-zA-Z]", " ")
         tweets = np.vectorize(lowercase)(tweets)
+        if (stopwordFiltering):
+            tweets = np.vectorize(stopwordFilter)(tweets)
 
         # Probably not the most elegant solution, but it works...
         # tweets_ = []
@@ -154,9 +160,12 @@ def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_col
         return tweets
 
     lem = WordNetLemmatizer()
-    count = 0
+
+    if stopwordFiltering:
+        filename = filename + "_no_stopwords"
     try:
         with open(filename, 'rb') as file:
+
             df = pickle.load(file)
             tprint("Loaded dataframe.")
     except Exception:
@@ -177,7 +186,7 @@ def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_col
         #     df['Text'].iloc[i] = clean_tweet(df['Text'].iloc[i])
         df['Text'] = clean_tweet(df['Text'])
 
-        with open('clean_tweets.txt', 'wb') as file:
+        with open(filename, 'wb') as file:
             pickle.dump(df, file)
         tprint(f"Dataframe stored in \"{filename}\".")
     return df.sample(samples)
@@ -224,7 +233,6 @@ class Scores:
 
 ## VADER
 # Adapted from https://medium.com/towards-artificial-intelligence/blacklivesmatter-twitter-vader-sentiment-analysis-using-python-8b6e6fc2cd6a
-
 def VADER():
     tprint("Starting VADER...")
     analyzer = SentimentIntensityAnalyzer()
@@ -241,6 +249,7 @@ def VADER():
 
 ## FastText
 def FT(n=2):
+
     tprint("FastText is starting...")
     def strip_FT(input):
         # Removes label from FT data and converts to int.
@@ -292,10 +301,6 @@ def FT(n=2):
     print_results(*validation)
     '''
 
-    # # %% Obtain FT F1, acc and roc values
-    # def predict(row):
-    #     return model.predict(row['Text'])
-
     ft_pred = ft_test.apply(lambda row: model.predict(row['Text']), axis=1)
 
     ft_pred = pd.DataFrame(ft_pred)  # convert from series to df
@@ -312,7 +317,6 @@ def FT(n=2):
 
 ## Logistic Regression
 # Adopted from https://www.kaggle.com/lbronchal/sentiment-analysis-with-svm
-
 def LR(vectoriser=None, stopwords=False, n=1, hyperparams=None):
     '''
     Logistic regression classifier, trained on df data set.
@@ -380,8 +384,7 @@ def LR(vectoriser=None, stopwords=False, n=1, hyperparams=None):
     return lr_scores
 
 
-## Naive Bayes: MultinomialNB with unigrams and TF-IDF
-
+# Naive Bayes
 def NB(vectoriser=None, stopwords=False, n=1, clf=None):
     '''
     Train a Naive Bayes classifier with df as input.
@@ -425,7 +428,6 @@ def NB(vectoriser=None, stopwords=False, n=1, clf=None):
     return nb_scores
 
 
-## Bar chart for f1 and acc scores for all classifiers
 def results(score_dict):
     '''
     Plot all accuracies and F1-scores of each classifier.
@@ -511,39 +513,40 @@ def results(score_dict):
 
 ##------------------------------##
 
-filename = "clean_tweets.txt"
+filename = "clean_tweets"
 target_file = "classifier_scores.txt"
 csv_path = r"16mtweets.csv"
 columns = ['Sentiment', 'ID', 'Date', 'Flag', 'User', 'Text']
-samples = 800000  # Samples per class (in this case half of the length of the dataset)
-
 mapping = {0: 0, 4: 1}  # Maps 0 to 0, and 4 to 1. The number 1, 2, and 3 don't seem to occur in the dataset.
 drop_columns = ['ID', 'Flag', 'User']  # Unused columns.
 
-df = loadData(filename, csv_path, columns, samples, mapping, drop_columns)
-
-# Smaller sample for SVM / LR due to processing time.
-samples = 100000
-# df2 = pd.concat([df.query("Sentiment==0").sample(samples), df.query("Sentiment==1").sample(samples)])
-df2 = df
-## Split data into train and test
-X_train, X_test, y_train, y_test = train_test_split(df['Text'], df['Sentiment'], test_size=0.2, random_state=42)
-# X_train_, X_test_, y_train_, y_test_ = train_test_split(df2['Text'], df2['Sentiment'], test_size=0.2, random_state=42)
-
-tk = TweetTokenizer()
-
-# Set your arguments here inside the respective classifier functions
+samples = 800000  # Samples per class (in this case half of the length of the dataset)
+samples2 = 800000  # Smaller sample for SVM / LR due to processing time.
 
 # Found using grid search using 40.000 samples, now fixed to reduce processing time.
 LR_hyper = {'penalty':'l2', 'C':0.23357214690901212, 'solver':'liblinear', 'max_iter':1000}
+vectoriser = None  # Fixed to TfidfVectoriser
+n=1  # Fixed to n=1
+filterStopwords = True
 
-vectoriser = None  # Tfidf
-n=1  # Fixed
+## --------------------------------- ##
+
+df = loadData(filename, csv_path, columns, samples, mapping, drop_columns, filterStopwords)
+X_train, X_test, y_train, y_test = train_test_split(df['Text'], df['Sentiment'], test_size=0.2, random_state=42)
+
+if samples == samples2:
+    df2 = df
+else:
+    df2 = pd.concat([df.query("Sentiment==0").sample(samples), df.query("Sentiment==1").sample(samples)])
+    X_train_, X_test_, y_train_, y_test_ = train_test_split(df2['Text'], df2['Sentiment'], test_size=0.2, random_state=42)
+
+tk = TweetTokenizer()
+
 scores = {
     'VADER': VADER(), # No tweaking
     'FT': FT(n=n),
-    'LR': LR(vectoriser=None, n=n, hyperparams=LR_hyper),
-    'NB': NB(vectoriser=None, n=n)
+    'LR': LR(vectoriser=None, n=n, hyperparams=LR_hyper, stopwords=False),
+    'NB': NB(vectoriser=None, n=n, stopwords=False)
 }
 
 results(scores)
