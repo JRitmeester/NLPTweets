@@ -46,9 +46,13 @@ from nltk.corpus import stopwords
 nltk.download('stopwords')
 en_stopwords = set(stopwords.words("english"))
 
-from nltk.tokenize import word_tokenize
-from nltk.stem import SnowballStemmer
 from nltk.tokenize import TweetTokenizer
+from nltk.stem import WordNetLemmatizer
+from nltk import word_tokenize
+from nltk import pos_tag
+from nltk.corpus import wordnet
+nltk.download('averaged_perceptron_tagger')
+from textblob import TextBlob
 
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
@@ -63,63 +67,97 @@ from sklearn.metrics import roc_curve, auc
 from sklearn.metrics import confusion_matrix, roc_auc_score, recall_score, precision_score
 from sklearn.naive_bayes import MultinomialNB, ComplementNB, GaussianNB, BernoulliNB
 
-# %% Cleaning data
-# Adapted from https://medium.com/towards-artificial-intelligence/blacklivesmatter-twitter-vader-sentiment-analysis-using-python-8b6e6fc2cd6a
+def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_columns=[]):
 
-def clean_tweets(tweets):
     def remove_pattern(input_txt, pattern):
         r = re.findall(pattern, input_txt)
         for i in r:
             input_txt = re.sub(i, '', input_txt)
         return input_txt
 
-    print("\tRemoving Retweet handles...")
-    # Remove twitter Retweet handles (RT @xxx:)
-    tweets = np.vectorize(remove_pattern)(tweets, "RT @[\w]*:")
+    def get_pos(word):
+        # From https://www.machinelearningplus.com/nlp/lemmatization-examples-python/#wordnetlemmatizerwithappropriatepostag
+        tag = nltk.pos_tag([word])[0][1][0].upper()
+        tag_dict = {"J": wordnet.ADJ,
+                    "N": wordnet.NOUN,
+                    "V": wordnet.VERB,
+                    "R": wordnet.ADV}
 
-    print("\tRemoving username handles...")
-    # Remove twitter handles (@xxx)
-    tweets = np.vectorize(remove_pattern)(tweets, "@[\w]*")
+        return tag_dict.get(tag, wordnet.NOUN)  # Return NOUN as default
 
-    print("\tRemoving URLs...")
-    # Remove URL links (httpxxx)
-    tweets = np.vectorize(remove_pattern)(tweets, "https?://[A-Za-z0-9./]*")
+    def lemmatise_(tweet):
+        sentences = tweet.split('.!?;')  # Split into seperate sentences
+        new_tweet = []
+        for sentence in sentences:
+            word_list = word_tokenize(sentence)
+            lemmatized = ' '.join([lem.lemmatize(w, get_pos(w)) for w in word_list])
+            new_tweet.append(lemmatized)
+        tweet = ' '.join(new_tweet)
+        return tweet
 
-    print("\tRemoving double whitespaces...")
-    # Remove multiple white spaces
-    tweets = np.vectorize(remove_pattern)(tweets, "[\s][\s]+")
+    def correct_spelling(tweet):
+        return TextBlob(str(tweet).lower()).correct().raw
 
-    print("\tRemoving punctuation...")
-    # Remove special characters, numbers, punctuations (except for #)
-    tweets = np.core.defchararray.replace(tweets, "[^a-zA-Z]", " ")
+    def clean_tweet(tweet):
+        # Adapted from https://medium.com/towards-artificial-intelligence/blacklivesmatter-twitter-vader-sentiment-analysis-using-python-8b6e6fc2cd6a
 
-    # Probably not the most elegant solution, but it works...
-    tweets_ = []
-    for row in tweets:
-        row = row.lower()  # Make text lowercase
-        tweets_.append(row)
-    return tweets_
+        # print("\tRemoving Retweet handles...")
+        # Remove twitter Retweet handles (RT @xxx:)
+        tweet = np.vectorize(remove_pattern)(tweet, "RT @[\w]*:")
 
-def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_columns=[]):
+        # print("\tRemoving username handles...")
+        # Remove twitter handles (@xxx)
+        tweet = np.vectorize(remove_pattern)(tweet, "@[\w]*")
+
+        # print("\tRemoving URLs...")
+        # Remove URL links (httpxxx)
+        tweet = np.vectorize(remove_pattern)(tweet, "https?://[A-Za-z0-9./]*")
+
+        # print("\tRemoving double whitespaces...")
+        # Remove multiple white spaces
+        tweet = np.vectorize(remove_pattern)(tweet, "[\s][\s]+")
+
+        tweet = np.vectorize(correct_spelling)(tweet)
+
+        tweet = np.vectorize(lemmatise_)(tweet)
+
+        # print("\tRemoving punctuation...")
+        # Remove special characters, numbers, punctuations (except for #)
+        tweet = np.core.defchararray.replace(tweet, "[^a-zA-Z]", " ")
+
+        # # Probably not the most elegant solution, but it works...
+        # tweets_ = []
+        # for row in tweets:
+        #     row = row.lower()  # Make text lowercase
+        #     corrected = TextBlob(row).correct()  # Correct spelling using TextBlob.
+        #     tweets_.append(corrected)
+
+        return tweet
+
+    lem = WordNetLemmatizer()
+    count = 0
     try:
         with open(filename, 'rb') as file:
             df = pickle.load(file)
             tprint("Loaded dataframe.")
-    except FileNotFoundError:
+    except Exception:
         tprint(f"The file \"{filename}\" was not found.")
         samples = min(samples, 800000 - 1)
 
         tprint(f"Loading data ({samples * 2} datapoints)... ", end='', flush=True)
         df = pd.read_csv(csv_path, names=columns, encoding='ISO-8859-1')
         df = df.drop(drop_columns, axis=1)
-
+        print(list(df.columns))
         # Better way of sampling, this way have guaranteed balanced data.
         df = pd.concat([df.query("Sentiment==0").sample(samples), df.query("Sentiment==4").sample(samples)])
         df['Sentiment'] = df['Sentiment'].map(mapping)  # map 4 to 1
-        print(time_(), "Done.")
+        tprint("Done.")
 
-        print(time_(), "Cleaning tweets...")
-        df['Text'] = clean_tweets(df['Text'])
+        tprint("Cleaning tweets...")
+        # for i in range(len(df['Text'])):
+        #     df['Text'].iloc[i] = clean_tweet(df['Text'].iloc[i])
+        df['Text'] = clean_tweet(df['Text'])
+
         with open('clean_tweets.txt', 'wb') as file:
             pickle.dump(df, file)
         tprint(f"Dataframe stored in \"{filename}\".")
@@ -246,17 +284,13 @@ def FT(n=2):
 ## Logistic Regression
 # Adopted from https://www.kaggle.com/lbronchal/sentiment-analysis-with-svm
 
-def LR(vectoriser=None, stem=False, stopwords=True, n=1, hyperparams=None):
+def LR(vectoriser=None, stopwords=True, n=1, hyperparams=None):
     tprint("Logistic Regression is starting...")
 
     def tokenize(text):
         '''Used in initialising the TweetTokenizer.'''
         tknzr = TweetTokenizer()
         return tknzr.tokenize(text)
-
-    def stem(doc):
-        '''Stems words to reduce token variations in sentences.'''
-        return (SnowballStemmer.stem(w) for w in analyzer(doc))
 
     if vectoriser is None:
         vectoriser = TfidfVectorizer(
@@ -265,6 +299,10 @@ def LR(vectoriser=None, stem=False, stopwords=True, n=1, hyperparams=None):
             ngram_range=(n, n),
             stop_words=(en_stopwords if stopwords else None))
 
+    text_counts = vectoriser.fit_transform(df2['Text'])
+    X_train, X_test, y_train, y_test = train_test_split(text_counts, df['Sentiment'], test_size=0.2,
+                                                        random_state=42)
+
     # Parameter optimization
     kfolds = StratifiedKFold(n_splits=5, shuffle=True, random_state=1)
 
@@ -272,7 +310,7 @@ def LR(vectoriser=None, stem=False, stopwords=True, n=1, hyperparams=None):
     pipeline_LR = make_pipeline(vectoriser, LogisticRegression(max_iter=1000))
 
     # For small datasets, ‘liblinear’ is a good choice, whereas ‘sag’ and ‘saga’ are faster for large ones.
-    if parameters is None:
+    if hyperparams is None:
         param_grid_ = {
             'logisticregression__penalty': ['l1', 'l2'],
             'logisticregression__C': np.logspace(-4, 4, 20),
@@ -285,18 +323,18 @@ def LR(vectoriser=None, stem=False, stopwords=True, n=1, hyperparams=None):
                                scoring="roc_auc",
                                verbose=1,
                                n_jobs=4)
-        grid_LR.fit(X_train_, y_train_)
-        grid_LR.score(X_test_, y_test_)
+        grid_LR.fit(X_train, y_train)
+        grid_LR.score(X_test, y_test)
         print('Best LR paramater:' + str(grid_LR.best_params_))
         print('Best score: ' + str(grid_LR.best_score_))
         model = grid_LR.best_estimator_
     else:
-        # TODO: Fix model parameters to reduce runtime.
-        pass
-        model = LogisticRegression(hyperparams)
-    pred = model.predict(X_test_)
+        model = LogisticRegression(**hyperparams)
+        model.fit(X_train, y_train)
 
-    lr_scores = Scores(pred, y_test_, "LR")
+    pred = model.predict(X_test)
+
+    lr_scores = Scores(pred, y_test, "LR")
     tprint("Logistic regression is done.")
     pprint(lr_scores.get_dict())
     return lr_scores
@@ -304,8 +342,9 @@ def LR(vectoriser=None, stem=False, stopwords=True, n=1, hyperparams=None):
 
 ## Naive Bayes: MultinomialNB with unigrams and TF-IDF
 
-def NB(vectorizer=None, stem=False, stopwords=True, n=1, clf=None):
+def NB(vectoriser=None, stopwords=True, n=1, clf=None):
     tprint("Naive Bayes is starting...")
+
     def tokenize(text):
         '''Used in initialising the TweetTokenizer.'''
         tknzr = TweetTokenizer()
@@ -316,16 +355,15 @@ def NB(vectorizer=None, stem=False, stopwords=True, n=1, clf=None):
 
     tk = TweetTokenizer()
 
-    if vectorizer is None:
-        vectorizer = TfidfVectorizer(
+    if vectoriser is None:
+        vectoriser = TfidfVectorizer(
             tokenizer=tokenize,
             lowercase=True,
             ngram_range=(n, n),
             stop_words=(en_stopwords if stopwords else None)
         )
 
-    text_counts = vectorizer.fit_transform(df['Text'])
-
+    text_counts = vectoriser.fit_transform(df2['Text'])
     X_train, X_test, y_train, y_test = train_test_split(text_counts, df['Sentiment'], test_size=0.2,
                                                         random_state=42)
     clf.fit(X_train, y_train)
@@ -369,7 +407,7 @@ def results(score_dict):
 
         # Add some text for labels, title and custom x-axis tick labels, etc.
         ax.set_ylabel('Scores')
-        ax.set_title('Accuracy and F1 scores per classifier')
+        ax.set_title(f'Accuracy and F1 scores (n={samples})')
         ax.set_xticks(x)
         ax.set_xticklabels(labels)
         ax.legend(loc='lower right')
@@ -381,17 +419,16 @@ def results(score_dict):
     def plot_roc():
         fig, ax = plt.subplots()
 
+        colors = {"VADER": "blue", "FT": "pink", "NB":"cyan", "LR":"red"}
         # Plot ROC curves for all classifers in one graph
-        plt.plot(score_dict["LR"].get_dict()["FPR"], score_dict["LR"].get_dict()["TPR"], color="red")
-        plt.plot(score_dict["VADER"].get_dict()["FPR"], score_dict["VADER"].get_dict()["TPR"], color="blue")
-        plt.plot(score_dict["FT"].get_dict()["FPR"], score_dict["FT"].get_dict()["TPR"], color="pink")
-        plt.plot(score_dict["NB"].get_dict()["FPR"], score_dict["NB"].get_dict()["TPR"], color="cyan")
+        for clf in score_dict.keys():
+            plt.plot(score_dict[clf].get_dict()["FPR"], score_dict["LR"].get_dict()["TPR"], color=colors[clf])
         plt.plot([0, 1], [0, 1], color='black', lw=2, linestyle='--')
         plt.xlim([0.0, 1.0])
         plt.ylim([0.0, 1.05])
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
-        plt.title('ROC')
+        plt.title(f'ROC (n={samples})')
         plt.legend(list(score_dict.keys()))
         plt.show()
 
@@ -409,7 +446,7 @@ filename = "clean_tweets.txt"
 target_file = "classifier_scores.txt"
 csv_path = r"16mtweets.csv"
 columns = ['Sentiment', 'ID', 'Date', 'Flag', 'User', 'Text']
-samples = 40000  # Samples per class (in this case half of the length of the dataset)
+samples = 80000  # Samples per class (in this case half of the length of the dataset)
 
 mapping = {0: 0, 4: 1}  # Maps 0 to 0, and 4 to 1. The number 1, 2, and 3 don't seem to occur in the dataset.
 drop_columns = ['ID', 'Flag', 'User']  # Unused columns.
@@ -417,26 +454,27 @@ drop_columns = ['ID', 'Flag', 'User']  # Unused columns.
 df = loadData(filename, csv_path, columns, samples, mapping, drop_columns)
 
 # Smaller sample for SVM / LR due to processing time.
-sample_size = 10000
-df2 = pd.concat([df.query("Sentiment==0").sample(sample_size), df.query("Sentiment==1").sample(sample_size)])
-
+samples = 80000
+# df2 = pd.concat([df.query("Sentiment==0").sample(samples), df.query("Sentiment==1").sample(samples)])
+df2 = df
 ## Split data into train and test
 X_train, X_test, y_train, y_test = train_test_split(df['Text'], df['Sentiment'], test_size=0.2, random_state=42)
-X_train_, X_test_, y_train_, y_test_ = train_test_split(df2['Text'], df2['Sentiment'], test_size=0.2, random_state=42)
+# X_train_, X_test_, y_train_, y_test_ = train_test_split(df2['Text'], df2['Sentiment'], test_size=0.2, random_state=42)
 
-stemmer = SnowballStemmer('english')
 tk = TweetTokenizer()
 
 # Set your arguments here inside the respective classifier functions
 
 # Found using grid search using 40.000 samples, now fixed to reduce processing time.
-LR_hyper = {"penalty":"l2", "C":0.23357214690901212, 'solver':'liblinear', "max_iter":1000}
+LR_hyper = {'penalty':'l2', 'C':0.23357214690901212, 'solver':'liblinear', 'max_iter':1000}
 
+vectoriser = None
+n=1
 scores = {
-    "VADER": VADER(),
-    "FT": FT(),
-    "LR": LR(hyperparams=LR_hyper),
-    "NB": NB()
+    'VADER': VADER(), # No tweaking
+    'FT': FT(n=n),
+    'LR': LR(vectoriser=None, n=n, hyperparams=LR_hyper),
+    'NB': NB(vectoriser=None, n=n)
 }
 
 results(scores)
