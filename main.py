@@ -68,7 +68,18 @@ from sklearn.metrics import confusion_matrix, roc_auc_score, recall_score, preci
 from sklearn.naive_bayes import MultinomialNB, ComplementNB, GaussianNB, BernoulliNB
 
 def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_columns=[]):
+    '''
+    Loads in previously cleaned data set ``filename``, or cleans new data set using the rest of the parameters and stores
+    it in ``filename`` for later reuse.
 
+    :param filename: The pickled file with previously cleaned data.
+    :param csv_path: The .csv file with the original data. Used if ``filename`` cannot be found.
+    :param columns: Headers of the columns that should be kept.
+    :param samples: Amount of samples per class. Should be max amount of data samples / 2.
+    :param mapping: Map labels to other values in a dictionary.
+    :param drop_columns: Columns that are not of interest can be dropped.
+    :return: pd.DataFrame of length=2*samples.
+    '''
     def remove_pattern(input_txt, pattern):
         r = re.findall(pattern, input_txt)
         for i in r:
@@ -76,6 +87,11 @@ def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_col
         return input_txt
 
     def get_pos(word):
+        '''
+        Get part-of-speech tag from WordNet. Limited version, more tags are available.
+        :param word: input string
+        :return: Tuple of the form (word, WordNet POS-tag)
+        '''
         # From https://www.machinelearningplus.com/nlp/lemmatization-examples-python/#wordnetlemmatizerwithappropriatepostag
         tag = nltk.pos_tag([word])[0][1][0].upper()
         tag_dict = {"J": wordnet.ADJ,
@@ -86,6 +102,11 @@ def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_col
         return tag_dict.get(tag, wordnet.NOUN)  # Return NOUN as default
 
     def lemmatise_(tweet):
+        '''
+        Lemmatise an entire sentence based on automated POS tagging
+        :param tweet: input string
+        :return: lemmatised string
+        '''
         sentences = tweet.split('.!?;')  # Split into seperate sentences
         new_tweet = []
         for sentence in sentences:
@@ -96,43 +117,41 @@ def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_col
         return tweet
 
     def correct_spelling(tweet):
+        '''
+        Automated spelling correction
+        :param tweet: input string
+        :return: spelling corrected string
+        '''
         return TextBlob(str(tweet).lower()).correct().raw
 
-    def clean_tweet(tweet):
+    def lowercase(tweet):
+        return tweet.lower()
+
+    def clean_tweet(tweets):
+        '''
+        Removes RT handles, username handles, URLs, double whitespaces and finally interpunction
+        :param tweet: input tweets
+        :return: List of input strings fully cleaned of unwanted artefacts.
+        '''
         # Adapted from https://medium.com/towards-artificial-intelligence/blacklivesmatter-twitter-vader-sentiment-analysis-using-python-8b6e6fc2cd6a
 
-        # print("\tRemoving Retweet handles...")
-        # Remove twitter Retweet handles (RT @xxx:)
-        tweet = np.vectorize(remove_pattern)(tweet, "RT @[\w]*:")
+        tweets = np.vectorize(remove_pattern)(tweets, "RT @[\w]*:")
+        tweets = np.vectorize(remove_pattern)(tweets, "@[\w]*")
+        tweets = np.vectorize(remove_pattern)(tweets, "https?://[A-Za-z0-9./]*")
+        tweets = np.vectorize(remove_pattern)(tweets, "[\s][\s]+")
+        # tweets = np.vectorize(correct_spelling)(tweets)
+        # tweets = np.vectorize(lemmatise_)(tweets)
+        tweets = np.core.defchararray.replace(tweets, "[^a-zA-Z]", " ")
+        tweets = np.vectorize(lowercase)(tweets)
 
-        # print("\tRemoving username handles...")
-        # Remove twitter handles (@xxx)
-        tweet = np.vectorize(remove_pattern)(tweet, "@[\w]*")
-
-        # print("\tRemoving URLs...")
-        # Remove URL links (httpxxx)
-        tweet = np.vectorize(remove_pattern)(tweet, "https?://[A-Za-z0-9./]*")
-
-        # print("\tRemoving double whitespaces...")
-        # Remove multiple white spaces
-        tweet = np.vectorize(remove_pattern)(tweet, "[\s][\s]+")
-
-        tweet = np.vectorize(correct_spelling)(tweet)
-
-        tweet = np.vectorize(lemmatise_)(tweet)
-
-        # print("\tRemoving punctuation...")
-        # Remove special characters, numbers, punctuations (except for #)
-        tweet = np.core.defchararray.replace(tweet, "[^a-zA-Z]", " ")
-
-        # # Probably not the most elegant solution, but it works...
+        # Probably not the most elegant solution, but it works...
         # tweets_ = []
-        # for row in tweets:
-        #     row = row.lower()  # Make text lowercase
-        #     corrected = TextBlob(row).correct()  # Correct spelling using TextBlob.
-        #     tweets_.append(corrected)
+        # for tweet in tweets:
+        #     tweet = row.lower()  # Make text lowercase
+        #     # corrected = TextBlob(row).correct()  # Correct spelling using TextBlob.
+        #     tweets_.append(tweet)
 
-        return tweet
+        return tweets
 
     lem = WordNetLemmatizer()
     count = 0
@@ -147,7 +166,7 @@ def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_col
         tprint(f"Loading data ({samples * 2} datapoints)... ", end='', flush=True)
         df = pd.read_csv(csv_path, names=columns, encoding='ISO-8859-1')
         df = df.drop(drop_columns, axis=1)
-        print(list(df.columns))
+
         # Better way of sampling, this way have guaranteed balanced data.
         df = pd.concat([df.query("Sentiment==0").sample(samples), df.query("Sentiment==4").sample(samples)])
         df['Sentiment'] = df['Sentiment'].map(mapping)  # map 4 to 1
@@ -165,9 +184,19 @@ def loadData(filename, csv_path, columns, samples=800000-1, mapping={}, drop_col
 
 
 def tprint(str, end='\n', flush=True):
+    '''
+    Print function with [HH:MM:SS] timestamp, used for timing.
+    :param str: input string
+    :param end: End-of-line char. Should be '' if another string is to be printed on the same line.
+    :param flush: Flush the output buffer
+    :return: None
+    '''
     print(f"[{datetime.now().strftime('%H:%M:%S')}] -", str, end=end, flush=flush)
 
 class Scores:
+    '''
+    Wrapper object for all score metrics relevant to us.
+    '''
     def __init__(self, prediction, ground_truth, clf):
         self.clf = clf
         self.pred = prediction
@@ -284,11 +313,20 @@ def FT(n=2):
 ## Logistic Regression
 # Adopted from https://www.kaggle.com/lbronchal/sentiment-analysis-with-svm
 
-def LR(vectoriser=None, stopwords=True, n=1, hyperparams=None):
-    tprint("Logistic Regression is starting...")
+def LR(vectoriser=None, stopwords=False, n=1, hyperparams=None):
+    '''
+    Logistic regression classifier, trained on df data set.
+    :param vectoriser: Defaults to TfidfVectoriser
+    :param stopwords: Remove stopwords, defaults to False
+    :param n: length of n-gram, defaults to True
+    :param hyperparams: Dictionary of hyperparameters. Can be found using grid search if left blank.
+    :return: Scores
+    '''
 
     def tokenize(text):
-        '''Used in initialising the TweetTokenizer.'''
+        '''
+        Used in initialising the TweetTokenizer.
+        '''
         tknzr = TweetTokenizer()
         return tknzr.tokenize(text)
 
@@ -299,18 +337,20 @@ def LR(vectoriser=None, stopwords=True, n=1, hyperparams=None):
             ngram_range=(n, n),
             stop_words=(en_stopwords if stopwords else None))
 
+    tprint("Logistic Regression is starting...")
+
     text_counts = vectoriser.fit_transform(df2['Text'])
     X_train, X_test, y_train, y_test = train_test_split(text_counts, df['Sentiment'], test_size=0.2,
                                                         random_state=42)
 
-    # Parameter optimization
-    kfolds = StratifiedKFold(n_splits=5, shuffle=True, random_state=1)
-
-    # Linear kernel since it is a binary problem (pos, neg)
-    pipeline_LR = make_pipeline(vectoriser, LogisticRegression(max_iter=1000))
-
-    # For small datasets, ‘liblinear’ is a good choice, whereas ‘sag’ and ‘saga’ are faster for large ones.
     if hyperparams is None:
+        # Parameter optimization
+        kfolds = StratifiedKFold(n_splits=5, shuffle=True, random_state=1)
+
+        # Linear kernel since it is a binary problem (pos, neg)
+        pipeline_LR = make_pipeline(vectoriser, LogisticRegression(max_iter=1000))
+
+        # For small datasets, ‘liblinear’ is a good choice, whereas ‘sag’ and ‘saga’ are faster for large ones.
         param_grid_ = {
             'logisticregression__penalty': ['l1', 'l2'],
             'logisticregression__C': np.logspace(-4, 4, 20),
@@ -342,11 +382,21 @@ def LR(vectoriser=None, stopwords=True, n=1, hyperparams=None):
 
 ## Naive Bayes: MultinomialNB with unigrams and TF-IDF
 
-def NB(vectoriser=None, stopwords=True, n=1, clf=None):
+def NB(vectoriser=None, stopwords=False, n=1, clf=None):
+    '''
+    Train a Naive Bayes classifier with df as input.
+    :param vectoriser: Defaults to TfidfVectoriser
+    :param stopwords: Remove stopwords, defaults to False
+    :param n: length of n-gram, defaults to True
+    :param clf: Type of NB classifier. Defaults to BernoulliNB.
+    :return: Scores
+    '''
     tprint("Naive Bayes is starting...")
 
     def tokenize(text):
-        '''Used in initialising the TweetTokenizer.'''
+        '''
+        Used in initialising the TweetTokenizer.
+        '''
         tknzr = TweetTokenizer()
         return tknzr.tokenize(text)
 
@@ -377,6 +427,11 @@ def NB(vectoriser=None, stopwords=True, n=1, clf=None):
 
 ## Bar chart for f1 and acc scores for all classifiers
 def results(score_dict):
+    '''
+    Plot all accuracies and F1-scores of each classifier.
+    :param score_dict: Dictionary in the form {classifier: Scores object}
+    :return: None
+    '''
 
     def round_vals(input):
         output = []
@@ -386,9 +441,18 @@ def results(score_dict):
         return output
 
     def plot():
+        '''
+        Plots bar charts of accuracy and F1 metrics for each classifier in ``score_dict``.
+        :return: None
+        '''
 
         def autolabel(rects):
-            """Attach a text label above each bar in *rects*, displaying its height."""
+            '''
+            Attach a text label above each bar in *rects*, displaying its height.
+            :param rects: Bar chart ``rect`` object.
+            :return: None
+            '''
+
             for rect in rects:
                 height = rect.get_height()
                 ax.annotate('{}'.format(height),
@@ -417,6 +481,11 @@ def results(score_dict):
         plt.show()
 
     def plot_roc():
+        '''
+        Plots the Receiver Operation Curve for each classifier in ``score_dict``.
+        :return: None
+        '''
+
         fig, ax = plt.subplots()
 
         colors = {"VADER": "blue", "FT": "pink", "NB":"cyan", "LR":"red"}
@@ -446,7 +515,7 @@ filename = "clean_tweets.txt"
 target_file = "classifier_scores.txt"
 csv_path = r"16mtweets.csv"
 columns = ['Sentiment', 'ID', 'Date', 'Flag', 'User', 'Text']
-samples = 80000  # Samples per class (in this case half of the length of the dataset)
+samples = 800000  # Samples per class (in this case half of the length of the dataset)
 
 mapping = {0: 0, 4: 1}  # Maps 0 to 0, and 4 to 1. The number 1, 2, and 3 don't seem to occur in the dataset.
 drop_columns = ['ID', 'Flag', 'User']  # Unused columns.
@@ -454,7 +523,7 @@ drop_columns = ['ID', 'Flag', 'User']  # Unused columns.
 df = loadData(filename, csv_path, columns, samples, mapping, drop_columns)
 
 # Smaller sample for SVM / LR due to processing time.
-samples = 80000
+samples = 100000
 # df2 = pd.concat([df.query("Sentiment==0").sample(samples), df.query("Sentiment==1").sample(samples)])
 df2 = df
 ## Split data into train and test
@@ -468,8 +537,8 @@ tk = TweetTokenizer()
 # Found using grid search using 40.000 samples, now fixed to reduce processing time.
 LR_hyper = {'penalty':'l2', 'C':0.23357214690901212, 'solver':'liblinear', 'max_iter':1000}
 
-vectoriser = None
-n=1
+vectoriser = None  # Tfidf
+n=1  # Fixed
 scores = {
     'VADER': VADER(), # No tweaking
     'FT': FT(n=n),
